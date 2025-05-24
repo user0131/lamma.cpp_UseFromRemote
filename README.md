@@ -12,15 +12,17 @@ llama-cpp-pythonを利用した軽量な並列処理APIサーバーです。olla
 
 ## セットアップ
 
+### 前提条件
+
+- Python 3.8以上
+- Poetry（パッケージ管理）: [インストール方法](https://python-poetry.org/docs/#installation)
+
 ### 1. 依存関係のインストール
 
 ```bash
 # リポジトリをクローン
-git clone https://github.com/your-username/comeapi-python.git
-cd comeapi-python
-
-# Poetryがインストールされていない場合
-curl -sSL https://install.python-poetry.org | python3 -
+git clone https://github.com/user0131/lamma.cpp_UseFromRemote.git
+cd lamma.cpp_UseFromRemote
 
 # 仮想環境をプロジェクト内に作成
 poetry config virtualenvs.in-project true
