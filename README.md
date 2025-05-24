@@ -80,21 +80,40 @@ python server.py ./models 0.0.0.0 8080 8 4
 
 ### API利用
 
-#### cURLでの利用
+#### ローカルでの利用
 
 ```bash
 # テキスト生成
 curl -X POST http://localhost:8080/generate \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "Python並列処理について説明してください",
+    "prompt": "こんにちは！あなたの名前を教えてください。",
     "model_name": "qwen3-4b.Q4_K_M.gguf",
-    "max_tokens": 512,
-    "temperature": 0.8
+    "max_tokens": 100,
+    "temperature": 0.7
   }'
 
 # モデル一覧
 curl http://localhost:8080/models
+```
+
+#### リモートからの利用
+
+サーバーを`0.0.0.0`でバインドしている場合、他のマシンからもアクセス可能です：
+
+```bash
+# サーバーのIPアドレスを確認
+ifconfig | grep "inet " | grep -v 127.0.0.1
+
+# リモートからテキスト生成（IPアドレスを実際のものに変更）
+curl -X POST http://10.71.0.59:8080/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "リモートからのテストです。こんにちは！",
+    "model_name": "qwen3-4b.Q4_K_M.gguf",
+    "max_tokens": 100,
+    "temperature": 0.8
+  }'
 ```
 
 #### Pythonでの利用
@@ -102,12 +121,22 @@ curl http://localhost:8080/models
 ```python
 import requests
 
-# テキスト生成
+# ローカル利用
 response = requests.post('http://localhost:8080/generate', json={
     "prompt": "Python並列処理について説明してください",
     "model_name": "qwen3-4b.Q4_K_M.gguf",
     "max_tokens": 512,
     "temperature": 0.8
+})
+
+print(response.json()['response'])
+
+# リモート利用（IPアドレスを実際のものに変更）
+response = requests.post('http://10.71.0.59:8080/generate', json={
+    "prompt": "リモートからのPythonテストです",
+    "model_name": "qwen3-4b.Q4_K_M.gguf",
+    "max_tokens": 200,
+    "temperature": 0.7
 })
 
 print(response.json()['response'])
