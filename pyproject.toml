@@ -13,6 +13,8 @@ uvicorn = ">=0.27.0"
 python-multipart = ">=0.0.9"
 pydantic = ">=2.6.0"
 asyncio = ">=3.4.3"
+aiohttp = ">=3.9.0"
+requests = ">=2.31.0"
 
 [tool.poetry.group.llama-cpp-python.dependencies]
 llama-cpp-python = ">=0.2.43"
