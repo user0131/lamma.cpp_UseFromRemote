@@ -12,7 +12,7 @@ import signal
 from typing import List
 
 class BackendManager:
-    def __init__(self, models_dir: str, host: str = "127.0.0.1", base_port: int = 8080, num_backends: int = 5):
+    def __init__(self, models_dir: str, host: str = "127.0.0.1", base_port: int = 8070, num_backends: int = 5):
         self.models_dir = models_dir
         self.host = host
         self.base_port = base_port
@@ -116,20 +116,43 @@ class BackendManager:
 
 def main():
     if len(sys.argv) < 2:
-        print("使用方法: python start_backends.py <モデルディレクトリ> [ホスト=127.0.0.1] [ベースポート=8080] [バックエンド数=5]")
+        print("使用方法: python start_backends.py <モデルディレクトリ> [ホスト=127.0.0.1] [ベースポート=8070] [バックエンド数=5]")
         print("例: python start_backends.py ./models")
-        print("例: python start_backends.py ./models 0.0.0.0 8080 5")
+        print("例: python start_backends.py ./models 0.0.0.0 8070 5")
+        print("例: python start_backends.py ./models 127.0.0.1 8070 30  # 最大30台並列")
         sys.exit(1)
         
     models_dir = sys.argv[1]
     host = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
-    base_port = int(sys.argv[3]) if len(sys.argv) > 3 else 8080
+    base_port = int(sys.argv[3]) if len(sys.argv) > 3 else 8070
     num_backends = int(sys.argv[4]) if len(sys.argv) > 4 else 5
+    
+    # バックエンド数の制限チェック
+    if num_backends > 30:
+        print(f"❌ エラー: バックエンド数は最大30台です: {num_backends}")
+        sys.exit(1)
+    
+    # ポート範囲チェック（8070-8099）
+    if base_port < 8070 or base_port + num_backends > 8100:
+        print(f"❌ エラー: ポート範囲は8070-8099です: {base_port}-{base_port + num_backends - 1}")
+        sys.exit(1)
     
     # モデルディレクトリの確認
     if not os.path.isdir(models_dir):
         print(f"❌ エラー: モデルディレクトリが存在しません: {models_dir}")
         sys.exit(1)
+        
+    # メモリ使用量の警告
+    if num_backends > 10:
+        estimated_memory = num_backends * 2.3  # Qwen3-4B per backend
+        if num_backends == 30:
+            print(f"🖥️  Mac Studio構成: {num_backends}台のバックエンドで約{estimated_memory:.1f}GBのメモリが必要です")
+            print("   Mac Studio 512GBメモリで最適化された構成です")
+        elif estimated_memory > 32:
+            print(f"⚠️  警告: {num_backends}台のバックエンドで約{estimated_memory:.1f}GBのメモリが必要です")
+            print("   64GB以上のメモリを推奨します")
+        else:
+            print(f"📊 メモリ使用量: {num_backends}台で約{estimated_memory:.1f}GB（32GB環境で快適）")
         
     print("="*60)
     print("🎯 ComeAPI ロードバランサー システム")
@@ -139,6 +162,8 @@ def main():
     print(f"🔢 ベースポート: {base_port}")
     print(f"⚡ バックエンド数: {num_backends}")
     print(f"📊 ポート範囲: {base_port}-{base_port + num_backends - 1}")
+    if num_backends <= 10:
+        print(f"💾 推定メモリ使用量: 約{num_backends * 2.3:.1f}GB")
     print("="*60)
     
     manager = BackendManager(models_dir, host, base_port, num_backends)

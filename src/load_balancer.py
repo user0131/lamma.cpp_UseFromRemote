@@ -271,19 +271,39 @@ def start_load_balancer(backend_host: str = "127.0.0.1", backend_base_port: int 
     
     uvicorn.run(app, host=lb_host, port=lb_port)
 
-if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) < 2:
-        print("使用方法: python load_balancer.py [バックエンドホスト=127.0.0.1] [バックエンドベースポート=8080] [バックエンド数=5] [LBホスト=0.0.0.0] [LBポート=9000]")
-        print("例: python load_balancer.py")
-        print("例: python load_balancer.py 127.0.0.1 8080 5 0.0.0.0 9000")
+def main():
+    if len(sys.argv) < 4:
+        print("使用方法: python load_balancer.py <バックエンドホスト> <ベースポート> <バックエンド数> [LBホスト=0.0.0.0] [LBポート=9000]")
+        print("例: python load_balancer.py 127.0.0.1 8070 5")
+        print("例: python load_balancer.py 127.0.0.1 8070 30 0.0.0.0 9000  # 30台並列")
         sys.exit(1)
     
-    backend_host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-    backend_base_port = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
-    num_backends = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+    backend_host = sys.argv[1]
+    backend_base_port = int(sys.argv[2])
+    num_backends = int(sys.argv[3])
     lb_host = sys.argv[4] if len(sys.argv) > 4 else "0.0.0.0"
     lb_port = int(sys.argv[5]) if len(sys.argv) > 5 else 9000
     
-    start_load_balancer(backend_host, backend_base_port, num_backends, lb_host, lb_port) 
+    # バックエンド数の制限チェック
+    if num_backends > 30:
+        print(f"❌ エラー: バックエンド数は最大30台です: {num_backends}")
+        sys.exit(1)
+    
+    # ポート範囲チェック（8070-8099）
+    if backend_base_port < 8070 or backend_base_port + num_backends > 8100:
+        print(f"❌ エラー: バックエンドポート範囲は8070-8099です: {backend_base_port}-{backend_base_port + num_backends - 1}")
+        sys.exit(1)
+    
+    print("="*70)
+    print("⚖️  ComeAPI ロードバランサー")
+    print("="*70)
+    print(f"🎯 バックエンド: {backend_host}:{backend_base_port}-{backend_base_port + num_backends - 1}")
+    print(f"📊 バックエンド数: {num_backends}")
+    print(f"🌐 ロードバランサー: http://{lb_host}:{lb_port}")
+    print("="*70)
+    
+    load_balancer = LoadBalancer(backend_host, backend_base_port, num_backends)
+    load_balancer.start_server(lb_host, lb_port)
+
+if __name__ == "__main__":
+    main() 
