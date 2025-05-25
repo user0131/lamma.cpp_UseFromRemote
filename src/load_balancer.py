@@ -8,7 +8,9 @@ import asyncio
 import aiohttp
 import time
 import logging
+import sys
 from typing import List, Dict, Any, Optional, Tuple
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -181,11 +183,27 @@ class LoadBalancer:
             "backends": backends_status
         }
 
+# グローバル変数
+load_balancer = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """アプリケーションのライフサイクル管理"""
+    # 起動時
+    await load_balancer.init_session()
+    logger.info("🚀 Load Balancer started")
+    yield
+    # 終了時
+    if load_balancer:
+        await load_balancer.close_session()
+    logger.info("🛑 Load Balancer stopped")
+
 # FastAPI アプリケーション
 app = FastAPI(
     title="ComeAPI Load Balancer",
     description="llama-cpp-python API用ロードバランサー",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS設定
@@ -196,22 +214,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# グローバル変数
-load_balancer = None
-
-@app.on_event("startup")
-async def startup_event():
-    """起動時の初期化"""
-    await load_balancer.init_session()
-    logger.info("🚀 Load Balancer started")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """終了時のクリーンアップ"""
-    if load_balancer:
-        await load_balancer.close_session()
-    logger.info("🛑 Load Balancer stopped")
 
 @app.get("/")
 async def root():
@@ -294,16 +296,7 @@ def main():
         print(f"❌ エラー: バックエンドポート範囲は8070-8099です: {backend_base_port}-{backend_base_port + num_backends - 1}")
         sys.exit(1)
     
-    print("="*70)
-    print("⚖️  ComeAPI ロードバランサー")
-    print("="*70)
-    print(f"🎯 バックエンド: {backend_host}:{backend_base_port}-{backend_base_port + num_backends - 1}")
-    print(f"📊 バックエンド数: {num_backends}")
-    print(f"🌐 ロードバランサー: http://{lb_host}:{lb_port}")
-    print("="*70)
-    
-    load_balancer = LoadBalancer(backend_host, backend_base_port, num_backends)
-    load_balancer.start_server(lb_host, lb_port)
+    start_load_balancer(backend_host, backend_base_port, num_backends, lb_host, lb_port)
 
 if __name__ == "__main__":
     main() 
