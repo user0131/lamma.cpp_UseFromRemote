@@ -236,9 +236,6 @@ async def v1_beta_chat_completions_parse(request: StructuredChatCompletionReques
             elif msg.role == "user":
                 prompt += f"User: {msg.content}\n"
         
-        # 構造化出力の場合はプロンプトエンジニアリングを使用しない
-        # Grammar制約で完全に制御するため
-        
         # モデルのロード
         model = load_model(model_path, num_threads=1)
         
