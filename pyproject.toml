@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "comeapi"
+name = "lamaapi"
 version = "0.1.0"
 description = "llama-cpp-pythonベースの並列処理LLMサーバー"
 authors = ["Your Name <your.email@example.com>"]

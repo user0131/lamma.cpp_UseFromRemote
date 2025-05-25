@@ -52,7 +52,10 @@ poetry run pip install --force-reinstall --no-cache-dir "cmake>=3.21.0"
 CMAKE_ARGS="-DLLAMA_METAL=on" poetry run pip install --force-reinstall --no-cache-dir llama-cpp-python
 
 # 必要なパッケージの追加インストール
+source .venv/bin/activate
 pip install aiohttp requests
+pip install "uvicorn[standard]" fastapi
+
 ```
 
 ### 2. モデルのダウンロード
@@ -93,7 +96,7 @@ python src/start_backends.py models 0.0.0.0 8070 30
 source .venv/bin/activate
 
 # ロードバランサー起動（リモートアクセス対応）
-python src/load_balancer.py 0.0.0.0 8070 5 0.0.0.0 9000
+python src/load_balancer.py 0.0.0.0 8070 10 0.0.0.0 9000
 
 # 30台対応（Mac Studio 512GB環境）
 python src/load_balancer.py 0.0.0.0 8070 30 0.0.0.0 9000
