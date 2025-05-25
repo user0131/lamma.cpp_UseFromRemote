@@ -1,0 +1,42 @@
+{
+  "model": "qwen3-4b.Q4_K_M.gguf",
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "Output",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "main_company_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A list of companies that are the main subject of the article."
+          },
+          "other_organizations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A list of other organizations."
+          }
+        },
+        "required": ["main_company_names", "other_organizations"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "# Role:\nYou are an assistant who analyzes Japanese news articles. Your task is to identify Japanese companies involved in the subject or direct events of the article.\nYou are committed to identifying the company name according to the criteria. You can extract even the names of unfamiliar organizations based on context. Even if there is some guesswork involved, it is not a problem because there is a mechanism to check it later. In other words, you just have to do your best not to miss the name of the company!\n\n# Instructions:\nNote which organization the article is primarily about. Ensure that **only specific companies or organizations** that are named and central to the article's subject are included.\n\n\n## Tasks:\n0. タスクを始める前に、記事全体を注意深く読み、全体の文脈を理解してください\n\n1. 記事内の組織名の特定\n   * 記事内に登場する全ての組織を特定してください\n   * 同じ組織を示す複数の表現がある場合は, より正式なものと推測されるもの一つを採用してください。\n      - 改名の記事の場合は、改名後の方を選んでください。\n      - 可能な限り, 完全な名称一つに絞る\n      - ただし、似た名称だが異なる組織であるように記述されている場合は、それぞれの組織名を抽出する\n\n2. 組織名のフィルタリング\n   * 会社, 公的機関などの組織名が特定対象となる組織名\n   * **以下のいずれかに当てはまる名称は組織名ではないので除外**\n      - 「御社」や「当社」など企業を指す一般的な表現\n      - 業種名（例：解体工事業、建設業、製造業、警察）\n      - 人名\n      - 役職名（例：社長、部長、従業員）\n\n   Examples:\n      - 「配送会社」「名古屋市のリフォーム会社」「警察」 →[]\n      - 「株式会社山田建設の社長」→ [\"山田建設\"]\n\n3. 適切な組織名の抽出\n\n   Step 1: 組織名の判別\n   各組織名が以下のカテゴリー [a,b,c,d,e,f,g] にいずれか属するかを記事の内容から分類してください\n      a) 法人名\n      b) 公的機関（例：学校, 政党, 役所）\n      c) 暴力団組織\n         - \"〜会\" \"〜組\"\n      d) 犯罪グループの通称・呼び名\n      e) 事件の報道に関与した機関\n      f) 警察機関\n         - 警察署名が特定されている場合のみ、その名称を抽出する\n         - \"〜署\"\n      g) 業種名や表現を示す一般名詞\n         - \"〜施設\", \"〜会社\"が組織名に含まれる場合は、一般的な業種名や表現とみなす\n\n   Step 2: 主題である組織の特定\n   * 二段階でチェックを行なうつもりで、判断に迷う場合は主題として扱ってください。\n   * 主題となる組織は複数でも良い。\n\n   - 抽出した全ての組織の, 記事本文との関連性の強さを順序づけしてください。\n   - 以下は関連性の指標\n      * 記事で触れられている回数が多い\n      * 記事の見出し（冒頭）に名前が出ている\n      * \"当社\"で表されている\n      * 重要人物が所属する\n\n   - 組織の代表者が話題の中心である場合, その人物が所属する組織名を主題として抽出する\n      * 代表者の死亡, 役員の不祥事, 逮捕など\n\n   - 記事の主題となっている組織を全て選んでください\n      - インシデント・事故に巻き込まれた組織は全て主題\n         * 情報漏洩した会社の委託先など\n      - 倒産情報では、倒産した企業を規模の大小に関わらず**全て**主題とする\n      - M&A や企業間提携など複数の企業によって成り立つ記事の場合、両方を必ず主題とする\n\n   - 明白に重要でない組織は省いてください\n   - 以下は省略されるべき組織の例\n      * 関連会社の決定事項を発表しただけの親会社\n      * 過去に同様の事例を起こしたとして比較対象に選ばれた組織\n      * 記事の本筋と関係が薄い組織\n\n   - Examples:\n      * \"山口県周南市の総合化学メーカー\"東ソー\"のグループ会社\"東ソー・エスジーエム\"の新南陽工場で爆発事故があった。\" → [\"東ソー\", \"東ソー・エスジーエム\"]\n\n   Step 3: 会社と他の組織の抽出\n   - カテゴリーaに含まれる組織のうちで,記事の主題となる法人を \"main_company_names\" として抽出し, それ以外は \"other_organizations\" として抽出\n   - 以下は全て \"other_organizations\" として抽出:\n      * カテゴリーb,c,d,e,fに属する全ての組織\n      * 記事の主題でない企業：グループ関連会社や親会社\n   - カテゴリーgに属する組織名は出力から除外\n\n4. 出力時のルール\n   a. 組織名をカンマ区切りのリストとして、スペースなしで出力してください。\n   b. 抽出した組織名が不確実な場合は出力を必ず空配列[]に変えてください\n   c. 組織名が記事内に見つからない場合は必ず空配列[]を返してください：\n      - 会社名が記事に記載されていない\n      - 記載されている名称が職業や業種の説明に過ぎない\n      - 個人名のみの記載\n      - 一般的な事業内容の説明\n\n\n## Output JSON schema:\n{\n   \"main_company_names\": <A list of companies that are the main subject of the article. Ideally, there should be one company, but multiple companies can be included if they are all central to the article's main topic.>,\n   \"other_organizations\": <A list of other organizations.>\n}\n\n- Example if no relevant companies are found.\n{\n   \"main_company_names\": [],\n   \"other_organizations\": [],\n}\n\n\n## Caution\n- Do not translate, parse, or modify the company names in any way. Extract them exactly as they appear in the original Japanese article.\n- Avoid extracting multiple names that may represent the same organization (except for prefixes of group companies)\n- Do not use expressions that are not in the article.\n- Before outputting, verify the extracted organization names for appropriateness.\n   If the extracted organization name does not meet all of the following conditions, return the output to an empty string:\n      □ Is this organization name a proper noun?\n      □ Is it not a generic industry name?\n      □ Is the organization clearly identified as an actual organization in the article?\n"
+    },
+    {
+      "role": "user",
+      "content": "# Target article: 東京都に本社を置く大手IT企業「テックソリューションズ株式会社」は、AI技術を活用した新サービスの開発を発表した。同社の田中社長は記者会見で、「この技術により業界に革新をもたらしたい」と述べた。開発には子会社の「テックラボ」も参画し、来年春のサービス開始を目指している。また、競合他社の「イノベート株式会社」も同様のサービス開発を進めており、業界内での競争が激化している。 /no_think"
+    }
+  ],
+  "temperature": 0.0,
+  "seed": 0
+} 

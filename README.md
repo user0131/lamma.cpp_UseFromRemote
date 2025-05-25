@@ -34,6 +34,9 @@ mkdir -p models
 
 # Qwen3-4Bモデルのダウンロード（例)
 curl -L https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf -o models/qwen3-4b.Q4_K_M.gguf
+
+# Qwen3 8b 8Q
+curl -L https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q8_K_M.gguf -o models/Qwen3-8b.Q8_K_M.gguf
 ```
 
 ## サーバー起動
@@ -98,6 +101,11 @@ curl -X POST http://localhost:9000/v1/beta/chat/completions/parse \
 curl -X POST http://localhost:9000/v1/beta/chat/completions/parse \
   -H "Content-Type: application/json" \
   -d @test/simple_test.json
+
+# 構造化出力(hawks: structure)
+curl -X POST http://localhost:9000/v1/beta/chat/completions/parse \
+  -H "Content-Type: application/json" \
+  -d @test/tstructured_name_test.json
 ```
 
 ## メモリ使用量ガイド
