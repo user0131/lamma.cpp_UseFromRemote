@@ -88,7 +88,7 @@ def load_model(model_path: str, num_threads: int) -> Llama:
     print(f"🔄 Loading model: {os.path.basename(model_path)}")
     llama_model = Llama(
         model_path=model_path,
-        n_ctx=32768,            # inportant: ここでモデル使用時のmax_contextを調整可能
+        n_ctx=4096,             # 構造化出力に適したサイズに調整
         n_threads=num_threads,
         verbose=False
     )
@@ -236,15 +236,8 @@ async def v1_beta_chat_completions_parse(request: StructuredChatCompletionReques
             elif msg.role == "user":
                 prompt += f"User: {msg.content}\n"
         
-        # 構造化出力の指示を追加
-        if request.response_format:
-            schema_info = extract_pydantic_schema(request.response_format)
-            prompt += "\nPlease respond in the following JSON format:\n"
-            if isinstance(schema_info, dict) and "json_schema" in schema_info:
-                prompt += f"Schema: {json.dumps(schema_info['json_schema']['schema'], indent=2)}\n"
-            else:
-                prompt += f"{json.dumps(schema_info, indent=2)}\n"
-            prompt += "Respond with valid JSON only, no additional text.\n"
+        # 構造化出力の場合はプロンプトエンジニアリングを使用しない
+        # Grammar制約で完全に制御するため
         
         # モデルのロード
         model = load_model(model_path, num_threads=1)
@@ -252,36 +245,78 @@ async def v1_beta_chat_completions_parse(request: StructuredChatCompletionReques
         # seedを使った再現可能な生成のため、seedを設定
         temperature = request.temperature if request.temperature is not None else 0.0
         
-        # テキスト生成
-        result = model.create_completion(
-            prompt=prompt,
-            max_tokens=request.max_tokens,
-            temperature=temperature,
-            top_p=request.top_p,
-            stream=False
-        )
-        
-        generated_content = result["choices"][0]["text"].strip()
-        
-        # 構造化出力の場合、JSON解析を試行
-        parsed_content = None
-        if request.response_format:
-            try:
-                # JSONの開始と終了を見つけて抽出
-                json_start = generated_content.find('{')
-                json_end = generated_content.rfind('}') + 1
-                if json_start != -1 and json_end > json_start:
-                    json_str = generated_content[json_start:json_end]
-                    parsed_content = json.loads(json_str)
-                    # 生成されたJSONを整形して再設定
-                    generated_content = json.dumps(parsed_content, ensure_ascii=False, indent=None)
-                else:
-                    # JSONが見つからない場合は、全体をJSONとして解析を試行
-                    parsed_content = json.loads(generated_content)
-            except json.JSONDecodeError:
-                # JSONパースに失敗した場合は元のテキストを使用
-                parsed_content = {"content": generated_content}
-                generated_content = json.dumps(parsed_content, ensure_ascii=False)
+        # 構造化出力の場合、llama-cpp-pythonのgrammar機能を使用
+        if request.response_format and isinstance(request.response_format, dict):
+            schema_info = request.response_format
+            if "json_schema" in schema_info:
+                # JSON Schemaから完全なGBNF文法を生成
+                schema = schema_info["json_schema"]["schema"]
+                grammar = generate_comprehensive_gbnf_grammar(schema)
+                
+                print(f"🔧 Schema: {json.dumps(schema, indent=2)}")
+                print(f"🔧 Generated GBNF Grammar:\n{grammar}")  # デバッグ用
+                
+                # Grammar制約付きでテキスト生成（プロンプトエンジニアリング不要）
+                try:
+                    result = model.create_completion(
+                        prompt=prompt,
+                        max_tokens=min(request.max_tokens or 1000, 1000),
+                        temperature=temperature,
+                        top_p=request.top_p,
+                        grammar=grammar,  # GBNF文法で完全制御
+                        stream=False
+                    )
+                    generated_content = result["choices"][0]["text"].strip()
+                    print(f"✅ Generated content: {generated_content}")
+                    
+                    # Grammar制約により、生成されたコンテンツは必ず有効なJSON
+                    try:
+                        parsed_content = json.loads(generated_content)
+                        print(f"✅ Successfully parsed JSON: {parsed_content}")
+                    except json.JSONDecodeError as e:
+                        # Grammar制約があるため、これは通常発生しないはず
+                        print(f"⚠️ Unexpected JSON parse error: {e}")
+                        print(f"⚠️ Generated content: {generated_content}")
+                        parsed_content = {"error": "Grammar constraint failed", "content": generated_content}
+                        generated_content = json.dumps(parsed_content, ensure_ascii=False)
+                        
+                except Exception as grammar_error:
+                    print(f"❌ Grammar generation error: {grammar_error}")
+                    # Grammar失敗時のフォールバック
+                    result = model.create_completion(
+                        prompt=prompt + "\nRespond with valid JSON only.",
+                        max_tokens=min(request.max_tokens or 1000, 1000),
+                        temperature=temperature,
+                        top_p=request.top_p,
+                        stream=False
+                    )
+                    generated_content = result["choices"][0]["text"].strip()
+                    try:
+                        parsed_content = json.loads(generated_content)
+                    except json.JSONDecodeError:
+                        parsed_content = {"error": "Fallback failed", "content": generated_content}
+            else:
+                # 通常のテキスト生成にフォールバック
+                result = model.create_completion(
+                    prompt=prompt,
+                    max_tokens=min(request.max_tokens or 1000, 1000),
+                    temperature=temperature,
+                    top_p=request.top_p,
+                    stream=False
+                )
+                generated_content = result["choices"][0]["text"].strip()
+                parsed_content = None
+        else:
+            # 通常のテキスト生成
+            result = model.create_completion(
+                prompt=prompt,
+                max_tokens=min(request.max_tokens or 1000, 1000),
+                temperature=temperature,
+                top_p=request.top_p,
+                stream=False
+            )
+            generated_content = result["choices"][0]["text"].strip()
+            parsed_content = None
         
         # トークン数計算
         prompt_tokens = estimate_tokens(prompt)
@@ -332,6 +367,125 @@ async def v1_beta_chat_completions_parse(request: StructuredChatCompletionReques
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成エラー: {str(e)}")
+
+def generate_comprehensive_gbnf_grammar(schema):
+    """JSON Schemaから完全なGBNF文法を生成"""
+    
+    def generate_property_grammar(prop_schema, prop_name=None):
+        """個別プロパティのGBNF文法を生成"""
+        prop_type = prop_schema.get("type", "string")
+        
+        if prop_type == "string":
+            if "enum" in prop_schema:
+                # Enum文字列の場合
+                enum_values = prop_schema["enum"]
+                enum_rules = " | ".join([f'"\\"" "{value}" "\\""' for value in enum_values])
+                return f"({enum_rules})"
+            else:
+                return "string"
+        elif prop_type == "number" or prop_type == "integer":
+            return "number"
+        elif prop_type == "boolean":
+            return "boolean"
+        elif prop_type == "array":
+            items_schema = prop_schema.get("items", {"type": "string"})
+            item_rule = generate_property_grammar(items_schema)
+            return f"array-{item_rule.replace('-', '_')}"
+        elif prop_type == "object":
+            # ネストされたオブジェクト（簡略化）
+            return "nested-object"
+        else:
+            return "string"  # デフォルト
+    
+    if schema.get("type") == "object":
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        
+        if not properties:
+            # 空のオブジェクト
+            return '''
+root ::= "{" ws "}"
+ws ::= [ \\t\\n]*
+'''
+        
+        # プロパティ定義を生成
+        property_rules = []
+        for i, (key, prop_schema) in enumerate(properties.items()):
+            prop_rule = generate_property_grammar(prop_schema, key)
+            property_rules.append(f'"\\"" "{key}" "\\"" ws ":" ws {prop_rule}')
+        
+        # メインルール構築
+        if len(property_rules) == 1:
+            # 単一プロパティ
+            grammar = f'root ::= "{{" ws {property_rules[0]} ws "}}"'
+        else:
+            # 複数プロパティ
+            properties_rule = " ws \",\" ws ".join(property_rules)
+            grammar = f'root ::= "{{" ws {properties_rule} ws "}}"'
+        
+        # 基本ルール定義
+        grammar += '''
+ws ::= [ \\t\\n]*
+string ::= "\\"" [^"\\\\]* "\\""
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+boolean ::= "true" | "false"
+nested-object ::= "{" ws "}"
+'''
+        
+        # 配列ルールを動的に追加
+        for prop_schema in properties.values():
+            if prop_schema.get("type") == "array":
+                items_schema = prop_schema.get("items", {"type": "string"})
+                item_type = items_schema.get("type", "string")
+                
+                if item_type == "string":
+                    if "enum" in items_schema:
+                        enum_values = items_schema["enum"]
+                        enum_rules = " | ".join([f'"\\"" "{value}" "\\""' for value in enum_values])
+                        grammar += f'''
+array-string ::= "[" ws (({enum_rules}) (ws "," ws ({enum_rules}))*)? ws "]"
+'''
+                    else:
+                        grammar += '''
+array-string ::= "[" ws (string (ws "," ws string)*)? ws "]"
+'''
+                elif item_type == "number":
+                    grammar += '''
+array-number ::= "[" ws (number (ws "," ws number)*)? ws "]"
+'''
+        
+        return grammar
+    
+    elif schema.get("type") == "array":
+        items_schema = schema.get("items", {"type": "string"})
+        item_type = items_schema.get("type", "string")
+        
+        if item_type == "string":
+            if "enum" in items_schema:
+                enum_values = items_schema["enum"]
+                enum_rules = " | ".join([f'"\\"" "{value}" "\\""' for value in enum_values])
+                return f'''
+root ::= "[" ws (({enum_rules}) (ws "," ws ({enum_rules}))*)? ws "]"
+ws ::= [ \\t\\n]*
+'''
+            else:
+                return '''
+root ::= "[" ws (string (ws "," ws string)*)? ws "]"
+ws ::= [ \\t\\n]*
+string ::= "\\"" [^"\\\\]* "\\""
+'''
+        elif item_type == "number":
+            return '''
+root ::= "[" ws (number (ws "," ws number)*)? ws "]"
+ws ::= [ \\t\\n]*
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+'''
+    
+    # デフォルトのJSON文法
+    return '''
+root ::= "{" ws "}"
+ws ::= [ \\t\\n]*
+'''
 
 # サーバー起動関数
 def start_server(models_directory: str, host: str = "127.0.0.1", port: int = 8080, 

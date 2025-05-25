@@ -31,5 +31,6 @@
     }
   ],
   "temperature": 0.0,
-  "seed": 0
+  "seed": 0,
+  "max_tokens": 1000
 } 
