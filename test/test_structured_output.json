@@ -1,5 +1,5 @@
 {
-  "model": "qwen3-4b.Q4_K_M.gguf",
+  "model": "Qwen3-8b.Q8_K_M.gguf",
   "response_format": {
     "type": "json_schema",
     "json_schema": {

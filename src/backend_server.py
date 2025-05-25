@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional, Union
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from llama_cpp import Llama
+from llama_cpp import Llama, LlamaGrammar
 
 # APIリクエスト用のモデル（OpenAI互換のみ）
 # OpenAI API互換のリクエストモデル
@@ -155,7 +155,7 @@ async def v1_chat_completions(request: ChatCompletionRequest):
                 prompt += f"User: {msg.content}\n"
         
         # モデルのロード
-        model = load_model(model_path, num_threads=1)
+        model = load_model(model_path, num_threads=4)
         
         # テキスト生成
         result = model.create_completion(
@@ -248,10 +248,18 @@ async def v1_beta_chat_completions_parse(request: StructuredChatCompletionReques
             if "json_schema" in schema_info:
                 # JSON Schemaから完全なGBNF文法を生成
                 schema = schema_info["json_schema"]["schema"]
-                grammar = generate_comprehensive_gbnf_grammar(schema)
+                grammar_str = generate_comprehensive_gbnf_grammar(schema)
                 
                 print(f"🔧 Schema: {json.dumps(schema, indent=2)}")
-                print(f"🔧 Generated GBNF Grammar:\n{grammar}")  # デバッグ用
+                print(f"🔧 Generated GBNF Grammar:\n{grammar_str}")  # デバッグ用
+                
+                # LlamaGrammarオブジェクトを作成
+                try:
+                    grammar = LlamaGrammar.from_string(grammar_str)
+                    print(f"✅ LlamaGrammar object created successfully")
+                except Exception as grammar_creation_error:
+                    print(f"❌ Failed to create LlamaGrammar: {grammar_creation_error}")
+                    raise grammar_creation_error
                 
                 # Grammar制約付きでテキスト生成（プロンプトエンジニアリング不要）
                 try:
@@ -260,7 +268,7 @@ async def v1_beta_chat_completions_parse(request: StructuredChatCompletionReques
                         max_tokens=min(request.max_tokens or 1000, 1000),
                         temperature=temperature,
                         top_p=request.top_p,
-                        grammar=grammar,  # GBNF文法で完全制御
+                        grammar=grammar,  # LlamaGrammarオブジェクトを使用
                         stream=False
                     )
                     generated_content = result["choices"][0]["text"].strip()
@@ -386,8 +394,12 @@ def generate_comprehensive_gbnf_grammar(schema):
             return "boolean"
         elif prop_type == "array":
             items_schema = prop_schema.get("items", {"type": "string"})
-            item_rule = generate_property_grammar(items_schema)
-            return f"array-{item_rule.replace('-', '_')}"
+            if "enum" in items_schema:
+                # Enum配列の場合は特別処理
+                return "enum-array"
+            else:
+                item_rule = generate_property_grammar(items_schema)
+                return f"array-{item_rule.replace('-', '_')}"
         elif prop_type == "object":
             # ネストされたオブジェクト（簡略化）
             return "nested-object"
@@ -435,15 +447,15 @@ nested-object ::= "{" ws "}"
                 items_schema = prop_schema.get("items", {"type": "string"})
                 item_type = items_schema.get("type", "string")
                 
-                if item_type == "string":
-                    if "enum" in items_schema:
-                        enum_values = items_schema["enum"]
-                        enum_rules = " | ".join([f'"\\"" "{value}" "\\""' for value in enum_values])
-                        grammar += f'''
-array-string ::= "[" ws (({enum_rules}) (ws "," ws ({enum_rules}))*)? ws "]"
+                if "enum" in items_schema:
+                    # Enum配列の場合
+                    enum_values = items_schema["enum"]
+                    enum_rules = " | ".join([f'"\\"" "{value}" "\\""' for value in enum_values])
+                    grammar += f'''
+enum-array ::= "[" ws (({enum_rules}) (ws "," ws ({enum_rules}))*)? ws "]"
 '''
-                    else:
-                        grammar += '''
+                elif item_type == "string":
+                    grammar += '''
 array-string ::= "[" ws (string (ws "," ws string)*)? ws "]"
 '''
                 elif item_type == "number":
@@ -486,7 +498,7 @@ ws ::= [ \\t\\n]*
 
 # サーバー起動関数
 def start_server(models_directory: str, host: str = "127.0.0.1", port: int = 8080, 
-                num_threads: int = 1):
+                num_threads: int = 4):
     """バックエンドサーバーを起動"""
     try:
         initialize_server(models_directory, num_threads)
@@ -516,7 +528,7 @@ if __name__ == "__main__":
     models_directory = sys.argv[1]
     host = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
     port = int(sys.argv[3]) if len(sys.argv) > 3 else 8080
-    num_threads = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    num_threads = int(sys.argv[4]) if len(sys.argv) > 4 else 4
     
     print("="*50)
     print("🖥️  Backend Server")
