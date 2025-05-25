@@ -1,0 +1,35 @@
+{
+  "model": "qwen3-4b.Q4_K_M.gguf",
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "Output",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The category of the content."
+          }
+        },
+        "required": ["category"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "あなたはカテゴリ分類の専門家です。\n必ず JSON 形式（キー: category）で出力してください。"
+    },
+    {
+      "role": "user",
+      "content": "タイトル: AI技術の最新動向\n, 説明: 人工知能技術の発展と企業のDX推進について解説\n\n以下のカテゴリから、この記事のカテゴリとして当てはまりそうなものを選んでください（複数可）\n[\"AI\", \"DX\", \"技術\", \"ビジネス\", \"受賞\", \"イベント\"]\n \n選んだカテゴリ名をリスト形式で出力してください。カテゴリ名は一言一句表現を変えず出力してください。どれにも当てはまる可能性がない場合、[\"other\"]と返してください。\n\n出力例:\n{ \"category\": [\"DX\", \"受賞\"] } /no_think"
+    }
+  ],
+  "temperature": 0.0,
+  "seed": 0
+} 

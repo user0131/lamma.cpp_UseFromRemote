@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-ComeAPI ロードバランサー
-複数のバックエンドサーバー間でリクエストを負荷分散
-"""
-
 import asyncio
 import aiohttp
 import time
@@ -32,26 +26,22 @@ class Backend:
         self.error_count = 0
         
     def add_response_time(self, response_time: float):
-        """レスポンス時間を記録"""
         self.response_times.append(response_time)
         # 最新10件のみ保持
         if len(self.response_times) > 10:
             self.response_times.pop(0)
     
     def get_average_response_time(self) -> float:
-        """平均レスポンス時間を取得"""
         if not self.response_times:
             return 0.0
         return sum(self.response_times) / len(self.response_times)
     
     def mark_error(self):
-        """エラーをマーク"""
         self.error_count += 1
         if self.error_count >= 3:
             self.is_healthy = False
     
     def mark_success(self):
-        """成功をマーク"""
         self.error_count = 0
         self.is_healthy = True
     
@@ -65,20 +55,17 @@ class LoadBalancer:
         self.session = None
         
     async def init_session(self):
-        """HTTP セッションを初期化"""
         if self.session is None:
             connector = aiohttp.TCPConnector(limit=100, limit_per_host=20)
             timeout = aiohttp.ClientTimeout(total=120)
             self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
     
     async def close_session(self):
-        """HTTP セッションを閉じる"""
         if self.session:
             await self.session.close()
             self.session = None
     
     async def health_check(self, backend: Backend) -> bool:
-        """バックエンドのヘルスチェック"""
         try:
             await self.init_session()
             start_time = time.time()
@@ -100,7 +87,6 @@ class LoadBalancer:
             return False
     
     async def health_check_all(self):
-        """全バックエンドのヘルスチェック"""
         current_time = time.time()
         tasks = []
         
@@ -113,7 +99,6 @@ class LoadBalancer:
             await asyncio.gather(*tasks, return_exceptions=True)
     
     def get_next_backend(self) -> Optional[Backend]:
-        """次の利用可能なバックエンドを取得 (ラウンドロビン)"""
         healthy_backends = [b for b in self.backends if b.is_healthy]
         
         if not healthy_backends:
@@ -126,7 +111,6 @@ class LoadBalancer:
         return backend
     
     async def forward_request(self, method: str, path: str, **kwargs) -> Tuple[int, Dict[str, Any]]:
-        """リクエストをバックエンドに転送"""
         backend = self.get_next_backend()
         if not backend:
             raise HTTPException(status_code=503, detail="利用可能なバックエンドサーバーがありません")
@@ -164,7 +148,6 @@ class LoadBalancer:
                 raise HTTPException(status_code=502, detail=f"バックエンドサーバーエラー: {str(e)}")
     
     def get_status(self) -> Dict[str, Any]:
-        """ロードバランサーの状態を取得"""
         backends_status = []
         for backend in self.backends:
             backends_status.append({
@@ -188,19 +171,18 @@ load_balancer = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """アプリケーションのライフサイクル管理"""
     # 起動時
     await load_balancer.init_session()
-    logger.info("🚀 Load Balancer started")
+    logger.info("Load Balancer started")
     yield
     # 終了時
     if load_balancer:
         await load_balancer.close_session()
-    logger.info("🛑 Load Balancer stopped")
+    logger.info("Load Balancer stopped")
 
 # FastAPI アプリケーション
 app = FastAPI(
-    title="ComeAPI Load Balancer",
+    title="LlamaAPI Load Balancer",
     description="llama-cpp-python API用ロードバランサー",
     version="1.0.0",
     lifespan=lifespan
@@ -217,35 +199,56 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    """ロードバランサーのステータス"""
     await load_balancer.health_check_all()
-    return {"message": "ComeAPI Load Balancer", "status": load_balancer.get_status()}
+    return {"message": "LlamaAPI Load Balancer", "status": load_balancer.get_status()}
 
 @app.get("/status")
 async def status():
-    """詳細なステータス情報"""
     await load_balancer.health_check_all()
     return load_balancer.get_status()
 
-@app.get("/models")
-async def list_models():
-    """モデル一覧 (バックエンドに転送)"""
-    status, result = await load_balancer.forward_request("GET", "/models")
+# OpenAI API互換エンドポイント
+@app.get("/v1")
+async def v1_root():
+    await load_balancer.health_check_all()
+    return {
+        "object": "api",
+        "version": "v1",
+        "message": "LlamaAPI Load Balancer - OpenAI Compatible",
+        "status": load_balancer.get_status()
+    }
+
+@app.get("/v1/models")
+async def v1_list_models():
+    status, result = await load_balancer.forward_request("GET", "/v1/models")
     if status != 200:
         raise HTTPException(status_code=status, detail=result)
+    
     return result
 
-@app.post("/generate")
-async def generate_text(request: Request):
-    """テキスト生成 (バックエンドに転送)"""
+@app.post("/v1/chat/completions")
+async def v1_chat_completions(request: Request):
     data = await request.json()
-    status, result = await load_balancer.forward_request("POST", "/generate", json=data)
+    
+    # バックエンドの/v1/chat/completionsに直接転送
+    status, result = await load_balancer.forward_request("POST", "/v1/chat/completions", json=data)
     if status != 200:
         raise HTTPException(status_code=status, detail=result)
+    
+    return result
+
+@app.post("/v1/beta/chat/completions/parse")
+async def v1_beta_chat_completions_parse(request: Request):
+    data = await request.json()
+    
+    # バックエンドのbeta.chat.completions.parseエンドポイントに直接転送
+    status, result = await load_balancer.forward_request("POST", "/v1/beta/chat/completions/parse", json=data)
+    if status != 200:
+        raise HTTPException(status_code=status, detail=result)
+    
     return result
 
 def create_load_balancer(host: str = "127.0.0.1", base_port: int = 8080, num_backends: int = 5) -> LoadBalancer:
-    """ロードバランサーを作成"""
     backends = []
     for i in range(num_backends):
         port = base_port + i
@@ -257,11 +260,10 @@ def create_load_balancer(host: str = "127.0.0.1", base_port: int = 8080, num_bac
 
 def start_load_balancer(backend_host: str = "127.0.0.1", backend_base_port: int = 8080, 
                        num_backends: int = 5, lb_host: str = "0.0.0.0", lb_port: int = 9000):
-    """ロードバランサーを起動"""
     global load_balancer
     
     print("="*60)
-    print("⚖️  ComeAPI Load Balancer")
+    print("⚖️  LlamaAPI Load Balancer")
     print("="*60)
     print(f"🎯 Load Balancer: http://{lb_host}:{lb_port}")
     print(f"📡 Backend Host: {backend_host}")
@@ -276,7 +278,6 @@ def start_load_balancer(backend_host: str = "127.0.0.1", backend_base_port: int 
 def main():
     if len(sys.argv) < 4:
         print("使用方法: python load_balancer.py <バックエンドホスト> <ベースポート> <バックエンド数> [LBホスト=0.0.0.0] [LBポート=9000]")
-        print("例: python load_balancer.py 127.0.0.1 8070 5")
         print("例: python load_balancer.py 127.0.0.1 8070 30 0.0.0.0 9000  # 30台並列")
         sys.exit(1)
     

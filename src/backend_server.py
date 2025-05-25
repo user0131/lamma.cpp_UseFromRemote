@@ -1,31 +1,39 @@
-#!/usr/bin/env python3
-"""
-Backend Server for Load Balancer System
-シンプルなバックエンドサーバー（ロードバランサー用）
-"""
-
 import os
 import sys
 import glob
+import time
+import json
+import hashlib
+import uuid
 import uvicorn
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from llama_cpp import Llama
 
-# APIリクエスト用のモデル
-class GenerationRequest(BaseModel):
-    prompt: str
-    model_name: str
-    max_tokens: Optional[int] = Field(default=100, ge=1, le=32768)
-    temperature: float = Field(default=0.8, ge=0, le=2.0)
-    top_k: int = Field(default=40, ge=1, le=100)
-    top_p: float = Field(default=0.9, ge=0, le=1.0)
+# APIリクエスト用のモデル（OpenAI互換のみ）
+# OpenAI API互換のリクエストモデル
+class ChatMessage(BaseModel):
+    role: str
+    content: str
 
-# APIレスポンス用のモデル
-class GenerationResponse(BaseModel):
-    response: str
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[ChatMessage]
+    max_tokens: Optional[int] = Field(default=10000)
+    temperature: Optional[float] = Field(default=0.0)
+    top_p: Optional[float] = Field(default=0.9)
+
+# Structured Outputs用のリクエストモデル
+class StructuredChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[ChatMessage]
+    response_format: Optional[Union[Dict[str, Any], BaseModel]] = None
+    max_tokens: Optional[int] = Field(default=10000)
+    temperature: Optional[float] = Field(default=0.0)
+    top_p: Optional[float] = Field(default=0.9)
+    seed: Optional[int] = Field(default=0)
 
 # モデル情報レスポンス用のモデル
 class ModelInfo(BaseModel):
@@ -58,7 +66,6 @@ llama_model: Optional[Llama] = None
 current_model_path = ""
 
 def initialize_server(models_directory: str, num_threads: int):
-    """サーバーの初期化"""
     global models_dir
     models_dir = models_directory
     
@@ -71,7 +78,6 @@ def initialize_server(models_directory: str, num_threads: int):
     print(f"   🧵 Threads: {num_threads}")
 
 def load_model(model_path: str, num_threads: int) -> Llama:
-    """モデルをロード（キャッシュ機能付き）"""
     global llama_model, current_model_path
     
     # 既に同じモデルがロードされている場合はそのまま使用
@@ -82,7 +88,7 @@ def load_model(model_path: str, num_threads: int) -> Llama:
     print(f"🔄 Loading model: {os.path.basename(model_path)}")
     llama_model = Llama(
         model_path=model_path,
-        n_ctx=2048,
+        n_ctx=32768,            # inportant: ここでモデル使用時のmax_contextを調整可能
         n_threads=num_threads,
         verbose=False
     )
@@ -93,11 +99,19 @@ def load_model(model_path: str, num_threads: int) -> Llama:
 # ルート
 @app.get("/")
 async def root():
-    return {"message": "ComeAPI サーバーが実行中です"}
+    return {"message": "LlamaAPI サーバーが実行中です"}
 
-# モデル一覧の取得
-@app.get("/models", response_model=ModelsResponse)
-async def list_models():
+# OpenAI API互換エンドポイント
+@app.get("/v1")
+async def v1_root():
+    return {
+        "object": "api",
+        "version": "v1",
+        "message": "LlamaAPI Backend Server - OpenAI Compatible"
+    }
+
+@app.get("/v1/models")
+async def v1_list_models():
     global models_dir
     
     models = []
@@ -105,44 +119,216 @@ async def list_models():
     
     for model_path in model_files:
         model_name = os.path.basename(model_path)
-        model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
-        models.append(ModelInfo(
-            name=model_name,
-            path=model_path,
-            size_mb=round(model_size_mb, 2)
-        ))
+        models.append({
+            "id": model_name,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "llamaapi",
+            "permission": [],
+            "root": model_name,
+            "parent": None
+        })
     
-    return ModelsResponse(models=models)
+    return {
+        "object": "list",
+        "data": models
+    }
 
-# テキスト生成API
-@app.post("/generate", response_model=GenerationResponse)
-async def generate_text(request: GenerationRequest):
+@app.post("/v1/chat/completions")
+async def v1_chat_completions(request: ChatCompletionRequest):
     global models_dir
     
     # モデルパスの構築
-    model_path = os.path.join(models_dir, request.model_name)
+    model_path = os.path.join(models_dir, request.model)
     
     # モデルの存在確認
     if not os.path.exists(model_path):
-        raise HTTPException(status_code=404, detail=f"モデルが見つかりません: {request.model_name}")
+        raise HTTPException(status_code=404, detail=f"モデルが見つかりません: {request.model}")
     
     try:
+        # メッセージからプロンプトを構築
+        prompt = ""
+        for msg in request.messages:
+            if msg.role == "system":
+                prompt += f"System: {msg.content}\n"
+            elif msg.role == "user":
+                prompt += f"User: {msg.content}\n"
+        
         # モデルのロード
-        model = load_model(model_path, num_threads=1)  # バックエンドは1スレッドで安定動作
+        model = load_model(model_path, num_threads=1)
         
         # テキスト生成
         result = model.create_completion(
-            prompt=request.prompt,
+            prompt=prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
-            top_k=request.top_k,
             top_p=request.top_p,
             stream=False
         )
         
-        # 結果の取得
-        generated_text = result["choices"][0]["text"]
-        return GenerationResponse(response=generated_text)
+        # OpenAI API形式で返却
+        return {
+            "id": f"chatcmpl-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": request.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": result["choices"][0]["text"]
+                    },
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": len(prompt.split()),
+                "completion_tokens": len(result["choices"][0]["text"].split()),
+                "total_tokens": len(prompt.split()) + len(result["choices"][0]["text"].split())
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成エラー: {str(e)}")
+
+def extract_pydantic_schema(response_format: Union[Dict[str, Any], BaseModel]) -> Dict[str, Any]:
+    if isinstance(response_format, dict):
+        return response_format
+    
+    # Pydanticモデルの場合、JSONスキーマを生成
+    if hasattr(response_format, 'model_json_schema'):
+        schema = response_format.model_json_schema()
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_format.__name__.lower(),
+                "schema": schema
+            }
+        }
+    
+    return response_format
+
+def generate_system_fingerprint(model_name: str, seed: int) -> str:
+    content = f"{model_name}_{seed}_{int(time.time() // 3600)}"  # 1時間ごとに変わる
+    return f"fp_{hashlib.md5(content.encode()).hexdigest()[:12]}"
+
+def estimate_tokens(text: str) -> int:
+    return max(1, len(text.split()) + len(text) // 4)
+
+@app.post("/v1/beta/chat/completions/parse")
+async def v1_beta_chat_completions_parse(request: StructuredChatCompletionRequest):
+    global models_dir
+    
+    # モデルパスの構築
+    model_path = os.path.join(models_dir, request.model)
+    
+    # モデルの存在確認
+    if not os.path.exists(model_path):
+        raise HTTPException(status_code=404, detail=f"モデルが見つかりません: {request.model}")
+    
+    try:
+        # メッセージからプロンプトを構築
+        prompt = ""
+        for msg in request.messages:
+            if msg.role == "system":
+                prompt += f"System: {msg.content}\n"
+            elif msg.role == "user":
+                prompt += f"User: {msg.content}\n"
+        
+        # 構造化出力の指示を追加
+        if request.response_format:
+            schema_info = extract_pydantic_schema(request.response_format)
+            prompt += "\nPlease respond in the following JSON format:\n"
+            if isinstance(schema_info, dict) and "json_schema" in schema_info:
+                prompt += f"Schema: {json.dumps(schema_info['json_schema']['schema'], indent=2)}\n"
+            else:
+                prompt += f"{json.dumps(schema_info, indent=2)}\n"
+            prompt += "Respond with valid JSON only, no additional text.\n"
+        
+        # モデルのロード
+        model = load_model(model_path, num_threads=1)
+        
+        # seedを使った再現可能な生成のため、seedを設定
+        temperature = request.temperature if request.temperature is not None else 0.0
+        
+        # テキスト生成
+        result = model.create_completion(
+            prompt=prompt,
+            max_tokens=request.max_tokens,
+            temperature=temperature,
+            top_p=request.top_p,
+            stream=False
+        )
+        
+        generated_content = result["choices"][0]["text"].strip()
+        
+        # 構造化出力の場合、JSON解析を試行
+        parsed_content = None
+        if request.response_format:
+            try:
+                # JSONの開始と終了を見つけて抽出
+                json_start = generated_content.find('{')
+                json_end = generated_content.rfind('}') + 1
+                if json_start != -1 and json_end > json_start:
+                    json_str = generated_content[json_start:json_end]
+                    parsed_content = json.loads(json_str)
+                    # 生成されたJSONを整形して再設定
+                    generated_content = json.dumps(parsed_content, ensure_ascii=False, indent=None)
+                else:
+                    # JSONが見つからない場合は、全体をJSONとして解析を試行
+                    parsed_content = json.loads(generated_content)
+            except json.JSONDecodeError:
+                # JSONパースに失敗した場合は元のテキストを使用
+                parsed_content = {"content": generated_content}
+                generated_content = json.dumps(parsed_content, ensure_ascii=False)
+        
+        # トークン数計算
+        prompt_tokens = estimate_tokens(prompt)
+        completion_tokens = estimate_tokens(generated_content)
+        total_tokens = prompt_tokens + completion_tokens
+        
+        # システムフィンgerprint生成
+        system_fingerprint = generate_system_fingerprint(request.model, request.seed or 0)
+        
+        # OpenAI beta.chat.completions.parse 形式で返却
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        
+        # メッセージオブジェクトを構築（model_dump_json対応）
+        message_obj = {
+            "role": "assistant",
+            "content": generated_content,
+        }
+        
+        # 構造化出力の場合、parsed と refusal フィールドを追加
+        if request.response_format and parsed_content is not None:
+            message_obj["parsed"] = parsed_content
+            message_obj["refusal"] = None
+        
+        response = {
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": request.model,
+            "system_fingerprint": system_fingerprint,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message_obj,
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "prompt_tokens_details": {
+                    "cached_tokens": 0  # Hawks対応のために追加
+                }
+            }
+        }
+        
+        return response
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成エラー: {str(e)}")

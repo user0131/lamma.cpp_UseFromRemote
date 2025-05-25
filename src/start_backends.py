@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-複数のバックエンドサーバーを起動するスクリプト
-ロードバランサー用に5つのサーバーインスタンスを異なるポートで起動
-"""
-
 import os
 import sys
 import subprocess
@@ -20,50 +14,46 @@ class BackendManager:
         self.processes: List[subprocess.Popen] = []
         
     def start_backends(self):
-        """全てのバックエンドサーバーを起動"""
-        print(f"🚀 {self.num_backends}個のバックエンドサーバーを起動中...")
+        print(f"{self.num_backends}個のバックエンドサーバーを起動中")
         
         for i in range(self.num_backends):
             port = self.base_port + i
             self._start_backend(port, i + 1)
             time.sleep(2)  # 起動間隔を空ける
             
-        print(f"✅ 全{self.num_backends}個のバックエンドサーバーが起動しました")
+        print(f"全{self.num_backends}個のバックエンドサーバーが起動しました")
         self._print_status()
         
-    def _start_backend(self, port: int, instance_num: int):
-        """単一のバックエンドサーバーを起動"""
-        print(f"📡 Backend {instance_num}: ポート {port} で起動中...")
-        
-        # スクリプトの場所を基準にbackend_server.pyのパスを決定
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        backend_script = os.path.join(script_dir, "backend_server.py")
-        
+    def _start_backend(self, port: int, backend_id: int):
         cmd = [
-            sys.executable, backend_script,
-            self.models_dir,
-            self.host,
-            str(port),
-            "1"  # 1スレッドで安定動作
+            sys.executable, "src/backend_server.py",
+            self.models_dir, self.host, str(port)
         ]
         
         try:
-            # ログ出力を無効化（長期間実行でもログが蓄積しない）
-            with open(os.devnull, 'w') as devnull:
+            # 新しいプロセスグループで起動
+            if os.name == 'posix':
                 process = subprocess.Popen(
                     cmd,
-                    stdout=devnull,
-                    stderr=devnull,
-                    preexec_fn=os.setsid if hasattr(os, 'setsid') else None
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    preexec_fn=os.setsid
                 )
+            else:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                )
+            
             self.processes.append(process)
-            print(f"✅ Backend {instance_num}: PID {process.pid}")
+            print(f"🚀 Backend {backend_id} 起動中: http://{self.host}:{port} (PID: {process.pid})")
             
         except Exception as e:
-            print(f"❌ Backend {instance_num} の起動に失敗: {e}")
+            print(f"❌ Backend {backend_id} の起動に失敗: {e}")
             
     def _print_status(self):
-        """起動状況を表示"""
         print("\n" + "="*60)
         print("📊 バックエンドサーバー状況:")
         print("="*60)
@@ -78,7 +68,6 @@ class BackendManager:
         print("="*60 + "\n")
         
     def stop_backends(self):
-        """全てのバックエンドサーバーを停止"""
         print("\n🛑 バックエンドサーバーを停止中...")
         
         for i, process in enumerate(self.processes):
@@ -93,7 +82,6 @@ class BackendManager:
                 except Exception as e:
                     print(f"⚠️  Backend {i+1} の停止中にエラー: {e}")
                     
-        # プロセスの終了を待機
         for process in self.processes:
             try:
                 process.wait(timeout=5)
@@ -103,7 +91,6 @@ class BackendManager:
         print("✅ 全てのバックエンドサーバーが停止しました")
         
     def wait(self):
-        """全てのプロセスが終了するまで待機"""
         try:
             while True:
                 time.sleep(1)
@@ -146,8 +133,8 @@ def main():
     if num_backends > 10:
         estimated_memory = num_backends * 2.3  # Qwen3-4B per backend
         if num_backends == 30:
-            print(f"🖥️  Mac Studio構成: {num_backends}台のバックエンドで約{estimated_memory:.1f}GBのメモリが必要です")
-            print("   Mac Studio 512GBメモリで最適化された構成です")
+            print(f"Mac Studio構成: {num_backends}台のバックエンドで約{estimated_memory:.1f}GBのメモリが必要です")
+            print("Mac Studio 512GBメモリで最適化された構成です")
         elif estimated_memory > 32:
             print(f"⚠️  警告: {num_backends}台のバックエンドで約{estimated_memory:.1f}GBのメモリが必要です")
             print("   64GB以上のメモリを推奨します")
@@ -155,7 +142,7 @@ def main():
             print(f"📊 メモリ使用量: {num_backends}台で約{estimated_memory:.1f}GB（32GB環境で快適）")
         
     print("="*60)
-    print("🎯 ComeAPI ロードバランサー システム")
+    print("🎯 LlamaAPI ロードバランサー システム")
     print("="*60)
     print(f"📁 モデルディレクトリ: {models_dir}")
     print(f"🌐 ホスト: {host}")
